@@ -752,15 +752,15 @@ async def main():
     await trading_bot.initialize()
     logger.info("Bot initialisé")
     
-    # Serveur web
+    # Serveur web pour webhooks TradingView
     app = await init_web_server()
     runner = web.AppRunner(app)
     await runner.setup()
     site = web.TCPSite(runner, WEBHOOK_HOST, WEBHOOK_PORT)
     await site.start()
-    logger.info(f"Serveur: {WEBHOOK_HOST}:{WEBHOOK_PORT}")
+    logger.info(f"Serveur webhook: {WEBHOOK_HOST}:{WEBHOOK_PORT}")
     
-    # Scheduler
+    # Scheduler rapports
     scheduler_thread = threading.Thread(target=schedule_daily_reports, daemon=True)
     scheduler_thread.start()
     
@@ -775,13 +775,23 @@ async def main():
     except Exception as e:
         logger.error(f"Message démarrage: {e}")
     
-    # Boucle principale
+    # DÉMARRAGE DU POLLING TELEGRAM - C'ÉTAIT LE PROBLÈME !
+    logger.info("Démarrage du polling Telegram...")
+    
     try:
+        # Polling pour recevoir les commandes Telegram
+        await trading_bot.application.updater.start_polling(drop_pending_updates=True)
+        logger.info("Polling Telegram démarré - Bot prêt à recevoir les commandes")
+        
+        # Boucle principale
         while True:
             await asyncio.sleep(1)
+            
     except KeyboardInterrupt:
-        logger.info("Arrêt...")
+        logger.info("Arrêt demandé...")
     finally:
+        logger.info("Arrêt du bot...")
+        await trading_bot.application.updater.stop()
         await trading_bot.application.stop()
         await trading_bot.application.shutdown()
 
