@@ -18,11 +18,11 @@ from telegram.ext import Application, CommandHandler, ContextTypes, CallbackQuer
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 
 # Configuration
-TELEGRAM_BOT_TOKEN = os.getenv('TELEGRAM_BOT_TOKEN', 'YOUR_BOT_TOKEN_HERE')
+TELEGRAM_BOT_TOKEN = '8412949168:AAGk_F8gQcECVWKK1_ARGhbHpVx_e3GS-5o'
 WEBHOOK_PORT = int(os.getenv('PORT', 8080))
-WEBHOOK_HOST = os.getenv('WEBHOOK_HOST', '0.0.0.0')
-ADMIN_CHAT_ID = os.getenv('ADMIN_CHAT_ID', 'YOUR_ADMIN_CHAT_ID')  # Chat ID de l'admin
-PUBLIC_CHANNEL_ID = os.getenv('PUBLIC_CHANNEL_ID', 'YOUR_CHANNEL_ID')  # ID du canal public
+WEBHOOK_HOST = '0.0.0.0'
+ADMIN_CHAT_ID = '8147226685'
+PUBLIC_CHANNEL_ID = '-4950276288'
 
 # Configuration du logging
 logging.basicConfig(
@@ -35,14 +35,14 @@ logger = logging.getLogger(__name__)
 class Trade:
     id: str
     symbol: str
-    side: str  # 'buy' or 'sell'
+    side: str
     entry_price: float
     quantity: float
     timestamp: datetime
     exit_price: Optional[float] = None
     exit_timestamp: Optional[datetime] = None
     pnl: Optional[float] = None
-    status: str = 'OPEN'  # OPEN, CLOSED, CANCELLED
+    status: str = 'OPEN'
 
 class TradingDatabase:
     def __init__(self, db_path: str = 'trading.db'):
@@ -159,7 +159,7 @@ class TradingDatabase:
         row = cursor.fetchone()
         conn.close()
         
-        if row[0] == 0:  # Aucun trade fermé aujourd'hui
+        if row[0] == 0:
             return {
                 'date': date_str,
                 'total_trades': 0,
@@ -195,12 +195,12 @@ class TradingBot:
         self.application.add_handler(CommandHandler("pnl", self.pnl_command))
         self.application.add_handler(CommandHandler("report", self.report_command))
         
-        # Ajout des gestionnaires de boutons interactifs
+        # Ajout du gestionnaire de boutons
         self.application.add_handler(CallbackQueryHandler(self.button_handler))
         
         await self.application.initialize()
         await self.application.start()
-        
+    
     def create_main_menu_keyboard(self):
         """Crée le clavier du menu principal"""
         keyboard = [
@@ -210,11 +210,11 @@ class TradingBot:
             ],
             [
                 InlineKeyboardButton("🔄 Trades Ouverts", callback_data="open_trades"),
-                InlineKeyboardButton("📋 Rapport Complet", callback_data="full_report")
+                InlineKeyboardButton("📋 Rapport", callback_data="full_report")
             ],
             [
-                InlineKeyboardButton("📅 Historique 7J", callback_data="weekly_stats"),
-                InlineKeyboardButton("⚙️ Status Algo", callback_data="algo_status")
+                InlineKeyboardButton("📅 7 Jours", callback_data="weekly_stats"),
+                InlineKeyboardButton("⚙️ Status", callback_data="algo_status")
             ],
             [
                 InlineKeyboardButton("🔄 Actualiser", callback_data="refresh_menu")
@@ -222,26 +222,56 @@ class TradingBot:
         ]
         return InlineKeyboardMarkup(keyboard)
     
-    def create_quick_actions_keyboard(self):
-        """Crée un clavier d'actions rapides"""
+    def create_back_keyboard(self):
+        """Crée un clavier de retour"""
         keyboard = [
-            [
-                InlineKeyboardButton("📊 P&L", callback_data="quick_pnl"),
-                InlineKeyboardButton("📈 Win Rate", callback_data="quick_winrate"),
-                InlineKeyboardButton("🔄 Trades", callback_data="quick_trades")
-            ],
             [InlineKeyboardButton("🏠 Menu Principal", callback_data="main_menu")]
         ]
         return InlineKeyboardMarkup(keyboard)
+        
+    async def start_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Commande /start"""
+        welcome_message = """
+🚀 **Bot Trading BTC - Bienvenue !**
 
+📊 **Commandes disponibles :**
+/menu - Menu interactif
+/stats - Statistiques du jour
+/trades - Trades ouverts
+/pnl - P&L total
+/report - Rapport détaillé
+
+📈 **Notifications automatiques :**
+• Alertes d'entrée en temps réel
+• Alertes de sortie avec P&L
+• Rapports quotidiens à 00:00 UTC
+
+🎯 **Algo :** Quick Profits BTC 5M
+💰 **Risk :** 5% par trade
+
+Utilisez /menu pour le tableau de bord interactif !
+        """
+        
+        keyboard = [
+            [InlineKeyboardButton("📊 Ouvrir Menu", callback_data="main_menu")]
+        ]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        
+        await update.message.reply_text(
+            welcome_message, 
+            parse_mode='Markdown',
+            reply_markup=reply_markup
+        )
+    
     async def menu_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """Commande /menu - Affiche le menu interactif"""
-        await self.send_main_menu(update.effective_chat.id, update.message_id)
+        """Commande /menu"""
+        await self.send_main_menu(update.effective_chat.id)
     
     async def send_main_menu(self, chat_id: str, message_id: int = None):
-        """Envoie ou met à jour le menu principal"""
+        """Envoie le menu principal"""
         today = datetime.now(timezone.utc)
         stats = self.db.get_daily_stats(today)
+        open_trades = self.db.get_open_trades()
         
         menu_text = f"""
 🚀 **MENU TRADING BTC**
@@ -250,11 +280,12 @@ class TradingBot:
 • Trades: {stats['total_trades']}
 • P&L: {stats['total_pnl']:+.2f} USD
 • Win Rate: {stats['win_rate']:.1f}%
+• En cours: {len(open_trades)}
 
-⚡ **Status:** Bot actif
-🕐 **Dernière MAJ:** {datetime.now(timezone.utc).strftime('%H:%M:%S')} UTC
+⚡ **Status:** Actif
+🕐 **MAJ:** {datetime.now(timezone.utc).strftime('%H:%M')} UTC
 
-Cliquez sur les boutons pour plus d'infos:
+Sélectionnez une option:
         """
         
         keyboard = self.create_main_menu_keyboard()
@@ -277,100 +308,79 @@ Cliquez sur les boutons pour plus d'infos:
                     reply_markup=keyboard
                 )
         except Exception as e:
-            logger.error(f"Erreur envoi menu: {e}")
-
+            logger.error(f"Erreur menu: {e}")
+    
     async def button_handler(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """Gestionnaire des boutons interactifs"""
+        """Gestionnaire des boutons"""
         query = update.callback_query
         await query.answer()
         
         chat_id = query.message.chat_id
         message_id = query.message.message_id
         
-        if query.data == "realtime_pnl":
-            await self.handle_realtime_pnl(chat_id, message_id)
-        elif query.data == "daily_stats":
-            await self.handle_daily_stats(chat_id, message_id)
-        elif query.data == "open_trades":
-            await self.handle_open_trades(chat_id, message_id)
-        elif query.data == "full_report":
-            await self.handle_full_report(chat_id, message_id)
-        elif query.data == "weekly_stats":
-            await self.handle_weekly_stats(chat_id, message_id)
-        elif query.data == "algo_status":
-            await self.handle_algo_status(chat_id, message_id)
-        elif query.data == "refresh_menu":
-            await self.send_main_menu(chat_id, message_id)
-        elif query.data == "main_menu":
-            await self.send_main_menu(chat_id, message_id)
-        elif query.data.startswith("quick_"):
-            await self.handle_quick_action(query.data, chat_id, message_id)
-
-    async def handle_realtime_pnl(self, chat_id: str, message_id: int):
-        """Affiche le P&L en temps réel"""
+        try:
+            if query.data == "main_menu" or query.data == "refresh_menu":
+                await self.send_main_menu(chat_id, message_id)
+            elif query.data == "realtime_pnl":
+                await self.show_pnl_realtime(chat_id, message_id)
+            elif query.data == "daily_stats":
+                await self.show_daily_stats(chat_id, message_id)
+            elif query.data == "open_trades":
+                await self.show_open_trades(chat_id, message_id)
+            elif query.data == "weekly_stats":
+                await self.show_weekly_stats(chat_id, message_id)
+            elif query.data == "algo_status":
+                await self.show_algo_status(chat_id, message_id)
+            elif query.data == "full_report":
+                await self.show_full_report(chat_id, message_id)
+        except Exception as e:
+            logger.error(f"Erreur bouton {query.data}: {e}")
+    
+    async def show_pnl_realtime(self, chat_id: str, message_id: int):
+        """Affiche P&L temps réel"""
         today = datetime.now(timezone.utc)
-        stats_today = self.db.get_daily_stats(today)
+        today_stats = self.db.get_daily_stats(today)
         
-        # Calcul P&L des 7 derniers jours
+        # P&L 7 jours
         weekly_pnl = 0
         for i in range(7):
             date = today - timedelta(days=i)
-            daily_stats = self.db.get_daily_stats(date)
-            weekly_pnl += daily_stats['total_pnl']
+            stats = self.db.get_daily_stats(date)
+            weekly_pnl += stats['total_pnl']
         
-        # Calcul P&L du mois
-        monthly_pnl = 0
-        for i in range(30):
-            date = today - timedelta(days=i)
-            daily_stats = self.db.get_daily_stats(date)
-            monthly_pnl += daily_stats['total_pnl']
-        
-        pnl_text = f"""
+        text = f"""
 💰 **P&L TEMPS RÉEL**
 
-📈 **Aujourd'hui:** {stats_today['total_pnl']:+.2f} USD
-📊 **7 derniers jours:** {weekly_pnl:+.2f} USD
-📅 **30 derniers jours:** {monthly_pnl:+.2f} USD
+📈 **Aujourd'hui:** {today_stats['total_pnl']:+.2f} USD
+📊 **7 jours:** {weekly_pnl:+.2f} USD
+📅 **Moyenne/jour:** {weekly_pnl/7:+.2f} USD
 
 🎯 **Performance:**
-• Trades aujourd'hui: {stats_today['total_trades']}
-• Win Rate: {stats_today['win_rate']:.1f}%
-• Moyenne/jour (7J): {weekly_pnl/7:+.2f} USD
+• Trades: {today_stats['total_trades']}
+• Win Rate: {today_stats['win_rate']:.1f}%
 
 🕐 **MAJ:** {datetime.now(timezone.utc).strftime('%H:%M:%S')} UTC
         """
         
-        keyboard = self.create_quick_actions_keyboard()
+        keyboard = self.create_back_keyboard()
         
-        try:
-            bot = telegram.Bot(token=TELEGRAM_BOT_TOKEN)
-            await bot.edit_message_text(
-                chat_id=chat_id,
-                message_id=message_id,
-                text=pnl_text,
-                parse_mode='Markdown',
-                reply_markup=keyboard
-            )
-        except Exception as e:
-            logger.error(f"Erreur P&L temps réel: {e}")
-
-    async def handle_daily_stats(self, chat_id: str, message_id: int):
-        """Affiche les statistiques détaillées du jour"""
+        bot = telegram.Bot(token=TELEGRAM_BOT_TOKEN)
+        await bot.edit_message_text(
+            chat_id=chat_id,
+            message_id=message_id,
+            text=text,
+            parse_mode='Markdown',
+            reply_markup=keyboard
+        )
+    
+    async def show_daily_stats(self, chat_id: str, message_id: int):
+        """Affiche stats détaillées du jour"""
         today = datetime.now(timezone.utc)
         stats = self.db.get_daily_stats(today)
         open_trades = self.db.get_open_trades()
         
-        # Calcul du temps moyen des trades ouverts
-        avg_duration = 0
-        if open_trades:
-            total_duration = sum(
-                (datetime.now(timezone.utc) - trade.timestamp).total_seconds() 
-                for trade in open_trades
-            )
-            avg_duration = total_duration / len(open_trades) / 3600  # en heures
-        
-        stats_text = f"""
-📊 **STATISTIQUES DÉTAILLÉES**
+        text = f"""
+📊 **STATS DÉTAILLÉES**
 
 🗓️ **{today.strftime('%d/%m/%Y')}**
 
@@ -383,243 +393,164 @@ Cliquez sur les boutons pour plus d'infos:
 💰 **Performance:**
 • P&L Total: {stats['total_pnl']:+.2f} USD
 • Win Rate: {stats['win_rate']:.1f}%
-• P&L moyen/trade: {stats['total_pnl']/max(1,stats['total_trades']):+.2f} USD
 
-⏱️ **Temps:**
-• Durée moy. trades ouverts: {avg_duration:.1f}h
-• Dernière MAJ: {datetime.now(timezone.utc).strftime('%H:%M:%S')} UTC
+🕐 **MAJ:** {datetime.now(timezone.utc).strftime('%H:%M')} UTC
         """
         
-        keyboard = self.create_quick_actions_keyboard()
+        keyboard = self.create_back_keyboard()
         
-        try:
-            bot = telegram.Bot(token=TELEGRAM_BOT_TOKEN)
-            await bot.edit_message_text(
-                chat_id=chat_id,
-                message_id=message_id,
-                text=stats_text,
-                parse_mode='Markdown',
-                reply_markup=keyboard
-            )
-        except Exception as e:
-            logger.error(f"Erreur stats quotidiennes: {e}")
-
-    async def handle_open_trades(self, chat_id: str, message_id: int):
-        """Affiche les trades ouverts avec détails"""
+        bot = telegram.Bot(token=TELEGRAM_BOT_TOKEN)
+        await bot.edit_message_text(
+            chat_id=chat_id,
+            message_id=message_id,
+            text=text,
+            parse_mode='Markdown',
+            reply_markup=keyboard
+        )
+    
+    async def show_open_trades(self, chat_id: str, message_id: int):
+        """Affiche trades ouverts"""
         open_trades = self.db.get_open_trades()
         
         if not open_trades:
-            trades_text = """
+            text = """
 🔄 **TRADES OUVERTS**
 
-📊 Aucun trade ouvert actuellement
+📊 Aucun trade ouvert
 
-🎯 En attente du prochain signal...
-✅ Algorithme actif et surveillant le marché
+🎯 En attente du prochain signal
+✅ Algorithme actif
             """
         else:
-            trades_text = f"🔄 **TRADES OUVERTS** ({len(open_trades)})\n\n"
+            text = f"🔄 **TRADES OUVERTS** ({len(open_trades)})\n\n"
             
-            for i, trade in enumerate(open_trades, 1):
+            for i, trade in enumerate(open_trades[:5], 1):  # Limite à 5 pour éviter message trop long
                 duration = datetime.now(timezone.utc) - trade.timestamp
                 hours = duration.total_seconds() / 3600
                 
-                # Estimation P&L flottant (approximatif)
-                # Note: Il faudrait le prix actuel pour un calcul précis
-                trades_text += f"""
-**#{i} - {trade.symbol}**
-🎯 Direction: {trade.side.upper()}
-💰 Prix entrée: {trade.entry_price:.2f}
-📊 Quantité: {trade.quantity:.4f}
-⏱️ Durée: {hours:.1f}h
-📅 {trade.timestamp.strftime('%d/%m %H:%M')}
+                text += f"""
+**#{i} {trade.symbol}**
+🎯 {trade.side.upper()}
+💰 {trade.entry_price:.2f}
+⏱️ {hours:.1f}h
+📅 {trade.timestamp.strftime('%H:%M')}
 ---
                 """
         
-        keyboard = self.create_quick_actions_keyboard()
+        keyboard = self.create_back_keyboard()
         
-        try:
-            bot = telegram.Bot(token=TELEGRAM_BOT_TOKEN)
-            await bot.edit_message_text(
-                chat_id=chat_id,
-                message_id=message_id,
-                text=trades_text,
-                parse_mode='Markdown',
-                reply_markup=keyboard
-            )
-        except Exception as e:
-            logger.error(f"Erreur trades ouverts: {e}")
-
-    async def handle_weekly_stats(self, chat_id: str, message_id: int):
-        """Affiche les statistiques de la semaine"""
+        bot = telegram.Bot(token=TELEGRAM_BOT_TOKEN)
+        await bot.edit_message_text(
+            chat_id=chat_id,
+            message_id=message_id,
+            text=text,
+            parse_mode='Markdown',
+            reply_markup=keyboard
+        )
+    
+    async def show_weekly_stats(self, chat_id: str, message_id: int):
+        """Affiche stats 7 jours"""
         today = datetime.now(timezone.utc)
         
-        weekly_data = []
         total_pnl = 0
         total_trades = 0
-        winning_days = 0
+        
+        text = "📅 **HISTORIQUE 7 JOURS**\n\n"
         
         for i in range(7):
             date = today - timedelta(days=i)
             stats = self.db.get_daily_stats(date)
-            weekly_data.append((date, stats))
             total_pnl += stats['total_pnl']
             total_trades += stats['total_trades']
-            if stats['total_pnl'] > 0:
-                winning_days += 1
-        
-        weekly_text = f"""
-📅 **STATISTIQUES 7 DERNIERS JOURS**
-
-💰 **Performance globale:**
-• P&L Total: {total_pnl:+.2f} USD
-• Trades Total: {total_trades}
-• P&L Moyen/jour: {total_pnl/7:+.2f} USD
-• Jours gagnants: {winning_days}/7
-
-📊 **Détail par jour:**
-        """
-        
-        for date, stats in reversed(weekly_data):
+            
             day_name = date.strftime('%a %d/%m')
             pnl_emoji = "🟢" if stats['total_pnl'] > 0 else "🔴" if stats['total_pnl'] < 0 else "⚪"
-            weekly_text += f"\n{pnl_emoji} {day_name}: {stats['total_pnl']:+.1f} USD ({stats['total_trades']} trades)"
+            text += f"{pnl_emoji} {day_name}: {stats['total_pnl']:+.1f} USD\n"
         
-        keyboard = self.create_quick_actions_keyboard()
+        text += f"""
+📊 **TOTAL:**
+• P&L: {total_pnl:+.2f} USD
+• Trades: {total_trades}
+• Moyenne: {total_pnl/7:+.2f} USD/jour
+        """
         
-        try:
-            bot = telegram.Bot(token=TELEGRAM_BOT_TOKEN)
-            await bot.edit_message_text(
-                chat_id=chat_id,
-                message_id=message_id,
-                text=weekly_text,
-                parse_mode='Markdown',
-                reply_markup=keyboard
-            )
-        except Exception as e:
-            logger.error(f"Erreur stats hebdomadaires: {e}")
-
-    async def handle_algo_status(self, chat_id: str, message_id: int):
-        """Affiche le status de l'algorithme"""
-        # Vérifier la dernière activité
+        keyboard = self.create_back_keyboard()
+        
+        bot = telegram.Bot(token=TELEGRAM_BOT_TOKEN)
+        await bot.edit_message_text(
+            chat_id=chat_id,
+            message_id=message_id,
+            text=text,
+            parse_mode='Markdown',
+            reply_markup=keyboard
+        )
+    
+    async def show_algo_status(self, chat_id: str, message_id: int):
+        """Affiche status algo"""
         open_trades = self.db.get_open_trades()
         
-        # Simuler le status de l'algo (vous pourriez ajouter plus de vérifications)
-        status_text = f"""
+        text = f"""
 ⚙️ **STATUS ALGORITHME**
 
 🚀 **Quick Profits BTC 5M**
 ✅ Status: ACTIF
 🌍 Sessions: 24/7
-🎯 Risk/trade: 5%
+🎯 Risk: 5%/trade
 
-📊 **Paramètres actuels:**
-• POC Length: 50
-• RSI Length: 9 
-• RSI Threshold: 50
-• TP Points: 100
-• SL Multiplier: 3.0x
-
-🔄 **État actuel:**
+📊 **État:**
 • Trades ouverts: {len(open_trades)}
 • Monitoring: BTC/USD 5M
-• Dernière vérif: {datetime.now(timezone.utc).strftime('%H:%M:%S')} UTC
+• Dernière vérif: {datetime.now(timezone.utc).strftime('%H:%M')} UTC
 
 📡 **Connexions:**
-✅ TradingView → Heroku
-✅ Heroku → Telegram
-✅ Base de données OK
+✅ TradingView OK
+✅ Heroku OK
+✅ Telegram OK
+✅ Base données OK
         """
         
-        keyboard = self.create_quick_actions_keyboard()
+        keyboard = self.create_back_keyboard()
         
-        try:
-            bot = telegram.Bot(token=TELEGRAM_BOT_TOKEN)
-            await bot.edit_message_text(
-                chat_id=chat_id,
-                message_id=message_id,
-                text=status_text,
-                parse_mode='Markdown',
-                reply_markup=keyboard
-            )
-        except Exception as e:
-            logger.error(f"Erreur status algo: {e}")
-
-    async def handle_full_report(self, chat_id: str, message_id: int):
-        """Génère et affiche un rapport complet"""
-        await self.send_daily_report(chat_id, message_id, interactive=True)
-
-    async def handle_quick_action(self, action: str, chat_id: str, message_id: int):
-        """Gère les actions rapides"""
-        if action == "quick_pnl":
-            today_stats = self.db.get_daily_stats(datetime.now(timezone.utc))
-            text = f"💰 **P&L Aujourd'hui:** {today_stats['total_pnl']:+.2f} USD"
-        elif action == "quick_winrate":
-            today_stats = self.db.get_daily_stats(datetime.now(timezone.utc))
-            text = f"📈 **Win Rate:** {today_stats['win_rate']:.1f}% ({today_stats['winning_trades']}/{today_stats['total_trades']})"
-        elif action == "quick_trades":
-            open_trades = self.db.get_open_trades()
-            text = f"🔄 **Trades:** {len(open_trades)} ouverts"
-        
-        keyboard = self.create_quick_actions_keyboard()
-        
-        try:
-            bot = telegram.Bot(token=TELEGRAM_BOT_TOKEN)
-            await bot.edit_message_text(
-                chat_id=chat_id,
-                message_id=message_id,
-                text=text,
-                parse_mode='Markdown',
-                reply_markup=keyboard
-            )
-        except Exception as e:
-            logger.error(f"Erreur action rapide: {e}")
-        """Commande /start"""
-        welcome_message = """
-🚀 **Bot Trading BTC - Bienvenue !**
-
-📊 **Commandes disponibles :**
-/stats - Statistiques du jour
-/trades - Trades ouverts
-/pnl - P&L total
-/report - Rapport détaillé
-
-📈 **Vous recevrez automatiquement :**
-• Alertes d'entrée en temps réel
-• Alertes de sortie avec P&L
-• Rapports quotidiens à 00:00 UTC
-
-🎯 **Algo :** Quick Profits BTC 5M
-💰 **Risk par trade :** Configurable
-        """
-        await update.message.reply_text(welcome_message, parse_mode='Markdown')
+        bot = telegram.Bot(token=TELEGRAM_BOT_TOKEN)
+        await bot.edit_message_text(
+            chat_id=chat_id,
+            message_id=message_id,
+            text=text,
+            parse_mode='Markdown',
+            reply_markup=keyboard
+        )
     
+    async def show_full_report(self, chat_id: str, message_id: int):
+        """Affiche rapport complet"""
+        await self.send_daily_report(chat_id, message_id, interactive=True)
+    
+    # Méthodes existantes (stats, trades, pnl, report)
     async def stats_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """Commande /stats - Statistiques du jour"""
+        """Commande /stats"""
         today = datetime.now(timezone.utc)
         stats = self.db.get_daily_stats(today)
         
         message = f"""
-📊 **Statistiques du jour** ({stats['date']})
+📊 **Statistiques** ({stats['date']})
 
-🎯 **Trades :** {stats['total_trades']}
-✅ **Gagnants :** {stats['winning_trades']}
-❌ **Perdants :** {stats['losing_trades']}
-📈 **Win Rate :** {stats['win_rate']:.1f}%
-💰 **P&L Total :** {stats['total_pnl']:+.2f} USD
+🎯 **Trades:** {stats['total_trades']}
+✅ **Gagnants:** {stats['winning_trades']}
+❌ **Perdants:** {stats['losing_trades']}
+📈 **Win Rate:** {stats['win_rate']:.1f}%
+💰 **P&L:** {stats['total_pnl']:+.2f} USD
         """
         
         await update.message.reply_text(message, parse_mode='Markdown')
     
     async def trades_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """Commande /trades - Trades ouverts"""
+        """Commande /trades"""
         open_trades = self.db.get_open_trades()
         
         if not open_trades:
-            await update.message.reply_text("📊 Aucun trade ouvert actuellement")
+            await update.message.reply_text("📊 Aucun trade ouvert")
             return
         
-        message = "📊 **Trades Ouverts :**\n\n"
+        message = "📊 **Trades Ouverts:**\n\n"
         for trade in open_trades:
             duration = datetime.now(timezone.utc) - trade.timestamp
             hours = duration.total_seconds() / 3600
@@ -629,14 +560,12 @@ Cliquez sur les boutons pour plus d'infos:
 💰 Prix : {trade.entry_price:.2f}
 📊 Qty : {trade.quantity:.4f}
 ⏱️ Durée : {hours:.1f}h
-📅 {trade.timestamp.strftime('%H:%M:%S')}
             """
         
         await update.message.reply_text(message, parse_mode='Markdown')
     
     async def pnl_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """Commande /pnl - P&L global"""
-        # Calculer P&L des 7 derniers jours
+        """Commande /pnl"""
         total_pnl = 0
         for i in range(7):
             date = datetime.now(timezone.utc) - timedelta(days=i)
@@ -648,24 +577,22 @@ Cliquez sur les boutons pour plus d'infos:
         message = f"""
 💰 **P&L Summary**
 
-📈 **Aujourd'hui :** {today_stats['total_pnl']:+.2f} USD
-📊 **7 derniers jours :** {total_pnl:+.2f} USD
-
-🎯 **Trades aujourd'hui :** {today_stats['total_trades']}
-✅ **Win Rate :** {today_stats['win_rate']:.1f}%
+📈 **Aujourd'hui:** {today_stats['total_pnl']:+.2f} USD
+📊 **7 jours:** {total_pnl:+.2f} USD
+🎯 **Trades:** {today_stats['total_trades']}
+✅ **Win Rate:** {today_stats['win_rate']:.1f}%
         """
         
         await update.message.reply_text(message, parse_mode='Markdown')
     
     async def report_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """Commande /report - Rapport détaillé"""
+        """Commande /report"""
         await self.send_daily_report(update.effective_chat.id)
     
     async def send_trade_alert(self, trade_data: Dict):
-        """Envoie une alerte de trade au canal public"""
+        """Envoie alerte trade"""
         try:
             if trade_data['action'] == 'entry':
-                # Nouveau trade
                 trade = Trade(
                     id=trade_data.get('id', f"{trade_data['symbol']}_{int(time.time())}"),
                     symbol=trade_data['symbol'],
@@ -681,21 +608,20 @@ Cliquez sur les boutons pour plus d'infos:
 🚀 **NOUVELLE ENTRÉE**
 
 🎯 **{trade.symbol}** - {trade.side.upper()}
-💰 **Prix :** {trade.entry_price:.2f} USD
-📊 **Quantité :** {trade.quantity:.4f} BTC
-⏰ **Heure :** {trade.timestamp.strftime('%H:%M:%S UTC')}
+💰 **Prix:** {trade.entry_price:.2f} USD
+📊 **Qty:** {trade.quantity:.4f}
+⏰ **Heure:** {trade.timestamp.strftime('%H:%M UTC')}
 
-🔥 **Algorithme :** Quick Profits BTC 5M
-📈 **Signal :** POC Breakout + RSI Cross
+🔥 **Algo:** Quick Profits BTC 5M
                 """
                 
             elif trade_data['action'] == 'exit':
-                # Fermeture de trade
                 trade_id = trade_data.get('id')
                 exit_price = float(trade_data['price'])
                 pnl = float(trade_data.get('pnl', 0))
                 
-                self.db.close_trade(trade_id, exit_price, datetime.now(timezone.utc), pnl)
+                if trade_id:
+                    self.db.close_trade(trade_id, exit_price, datetime.now(timezone.utc), pnl)
                 
                 pnl_emoji = "💚" if pnl > 0 else "❤️"
                 pnl_text = "PROFIT" if pnl > 0 else "PERTE"
@@ -704,14 +630,14 @@ Cliquez sur les boutons pour plus d'infos:
 {pnl_emoji} **TRADE FERMÉ - {pnl_text}**
 
 🎯 **{trade_data['symbol']}**
-💰 **Prix de sortie :** {exit_price:.2f} USD
-📊 **P&L :** {pnl:+.2f} USD ({pnl/float(trade_data.get('entry_price', 1))*100:+.2f}%)
-⏰ **Heure :** {datetime.now(timezone.utc).strftime('%H:%M:%S UTC')}
-
-🎯 **Résultat :** {pnl_text}
+💰 **Sortie:** {exit_price:.2f} USD
+📊 **P&L:** {pnl:+.2f} USD
+⏰ **Heure:** {datetime.now(timezone.utc).strftime('%H:%M UTC')}
                 """
             
-            # Envoyer au canal public
+            else:
+                return
+            
             bot = telegram.Bot(token=TELEGRAM_BOT_TOKEN)
             await bot.send_message(
                 chat_id=PUBLIC_CHANNEL_ID,
@@ -719,21 +645,19 @@ Cliquez sur les boutons pour plus d'infos:
                 parse_mode='Markdown'
             )
             
-            logger.info(f"Alerte envoyée: {trade_data['action']} pour {trade_data['symbol']}")
+            logger.info(f"Alerte envoyée: {trade_data['action']}")
             
         except Exception as e:
-            logger.error(f"Erreur lors de l'envoi d'alerte: {e}")
+            logger.error(f"Erreur alerte: {e}")
     
     async def send_daily_report(self, chat_id: str = None, message_id: int = None, interactive: bool = False):
-        """Envoie le rapport quotidien"""
+        """Envoie rapport quotidien"""
         chat_id = chat_id or PUBLIC_CHANNEL_ID
         today = datetime.now(timezone.utc)
-        yesterday = today - timedelta(days=1)
         
         today_stats = self.db.get_daily_stats(today)
-        yesterday_stats = self.db.get_daily_stats(yesterday)
         
-        # Calcul des stats de la semaine
+        # Stats semaine
         weekly_pnl = 0
         weekly_trades = 0
         for i in range(7):
@@ -750,30 +674,18 @@ Cliquez sur les boutons pour plus d'infos:
 • Win Rate: {today_stats['win_rate']:.1f}%
 • P&L: {today_stats['total_pnl']:+.2f} USD
 
-📈 **HIER**
-• P&L: {yesterday_stats['total_pnl']:+.2f} USD
-• Trades: {yesterday_stats['total_trades']}
-
-📊 **7 DERNIERS JOURS**
+📊 **7 JOURS**
 • P&L Total: {weekly_pnl:+.2f} USD
-• Trades Total: {weekly_trades}
-• P&L Moyen/jour: {weekly_pnl/7:+.2f} USD
+• Trades: {weekly_trades}
+• Moyenne: {weekly_pnl/7:+.2f} USD/jour
 
-🚀 **ALGORITHME:** Quick Profits BTC 5M
+🚀 **ALGO:** Quick Profits BTC 5M
 ⚡ **STATUS:** Actif 24/7
-🎯 **RISK:** 5% par trade
-
----
-💡 **Prochaines Sessions:**
-🏮 Asie: 20:00-08:00 UTC
-🇪🇺 Europe: 08:00-16:00 UTC  
-🇺🇸 USA: 14:00-22:00 UTC
         """
         
-        # Ajouter boutons si interactif
         keyboard = None
         if interactive:
-            keyboard = self.create_quick_actions_keyboard()
+            keyboard = self.create_back_keyboard()
         
         try:
             bot = telegram.Bot(token=TELEGRAM_BOT_TOKEN)
@@ -792,20 +704,19 @@ Cliquez sur les boutons pour plus d'infos:
                     parse_mode='Markdown',
                     reply_markup=keyboard
                 )
-            logger.info("Rapport quotidien envoyé")
+            logger.info("Rapport envoyé")
         except Exception as e:
-            logger.error(f"Erreur lors de l'envoi du rapport: {e}")
+            logger.error(f"Erreur rapport: {e}")
 
-# Instance globale du bot
+# Instance globale
 trading_bot = TradingBot()
 
 async def webhook_handler(request):
-    """Gestionnaire des webhooks de TradingView"""
+    """Gestionnaire webhooks"""
     try:
         data = await request.json()
         logger.info(f"Webhook reçu: {data}")
         
-        # Traitement des données du webhook
         if 'action' in data and 'symbol' in data:
             await trading_bot.send_trade_alert(data)
         
@@ -816,17 +727,17 @@ async def webhook_handler(request):
         return web.json_response({'error': str(e)}, status=400)
 
 def schedule_daily_reports():
-    """Programme les rapports quotidiens"""
+    """Programme rapports quotidiens"""
     schedule.every().day.at("00:00").do(
         lambda: asyncio.create_task(trading_bot.send_daily_report())
     )
     
     while True:
         schedule.run_pending()
-        time.sleep(60)  # Vérifier chaque minute
+        time.sleep(60)
 
 async def init_web_server():
-    """Initialise le serveur web pour les webhooks"""
+    """Initialise serveur web"""
     app = web.Application()
     app.router.add_post('/webhook', webhook_handler)
     app.router.add_get('/health', lambda r: web.json_response({'status': 'ok'}))
@@ -835,42 +746,41 @@ async def init_web_server():
 
 async def main():
     """Fonction principale"""
-    logger.info("Démarrage du bot trading...")
+    logger.info("Démarrage bot...")
     
-    # Initialisation du bot Telegram
+    # Initialisation bot
     await trading_bot.initialize()
-    logger.info("Bot Telegram initialisé")
+    logger.info("Bot initialisé")
     
-    # Démarrage du serveur web pour webhooks
+    # Serveur web
     app = await init_web_server()
     runner = web.AppRunner(app)
     await runner.setup()
     site = web.TCPSite(runner, WEBHOOK_HOST, WEBHOOK_PORT)
     await site.start()
-    logger.info(f"Serveur webhook démarré sur {WEBHOOK_HOST}:{WEBHOOK_PORT}")
+    logger.info(f"Serveur: {WEBHOOK_HOST}:{WEBHOOK_PORT}")
     
-    # Démarrage du scheduler pour rapports quotidiens en thread séparé
+    # Scheduler
     scheduler_thread = threading.Thread(target=schedule_daily_reports, daemon=True)
     scheduler_thread.start()
-    logger.info("Scheduler de rapports démarré")
     
-    # Message de démarrage
+    # Message démarrage
     try:
         bot = telegram.Bot(token=TELEGRAM_BOT_TOKEN)
         await bot.send_message(
             chat_id=PUBLIC_CHANNEL_ID,
-            text="🚀 **BOT TRADING DÉMARRÉ**\n\n📊 Surveillance des signaux activée\n⚡ Prêt à recevoir les alertes !",
+            text="🚀 **BOT DÉMARRÉ**\n\n📊 Surveillance active\n⚡ Prêt !",
             parse_mode='Markdown'
         )
     except Exception as e:
-        logger.error(f"Impossible d'envoyer le message de démarrage: {e}")
+        logger.error(f"Message démarrage: {e}")
     
-    # Maintenir le bot en vie
+    # Boucle principale
     try:
         while True:
             await asyncio.sleep(1)
     except KeyboardInterrupt:
-        logger.info("Arrêt du bot...")
+        logger.info("Arrêt...")
     finally:
         await trading_bot.application.stop()
         await trading_bot.application.shutdown()
