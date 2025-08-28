@@ -87,18 +87,6 @@ def get_daily_stats(date):
     cursor = conn.cursor()
     
     date_str = date.strftime('%Y-%m-%d')
-
-    def get_recent_trades(limit=10):
-    """Récupère les trades récents"""
-    # ... (tout le code de cette fonction)
-
-def get_all_stats():
-    """Récupère toutes les statistiques"""
-    # ... (tout le code de cette fonction)
-
-def get_pnl_chart_data():
-    """Récupère les données pour le graphique P&L"""
-    # ... (tout le code de cette fonction)
     
     cursor.execute('''
         SELECT 
@@ -139,6 +127,121 @@ def get_pnl_chart_data():
         'win_rate': win_rate,
         'open_trades': open_trades
     }
+
+def get_recent_trades(limit=10):
+    """Récupère les trades récents"""
+    conn = sqlite3.connect('trading.db')
+    cursor = conn.cursor()
+    
+    cursor.execute('''
+        SELECT id, symbol, side, entry_price, quantity, timestamp, 
+               exit_price, exit_timestamp, pnl, status
+        FROM trades 
+        ORDER BY timestamp DESC 
+        LIMIT ?
+    ''', (limit,))
+    
+    trades = []
+    for row in cursor.fetchall():
+        trade = {
+            'id': row[0],
+            'symbol': row[1],
+            'side': row[2],
+            'entry_price': row[3],
+            'quantity': row[4],
+            'timestamp': row[5],
+            'exit_price': row[6],
+            'exit_timestamp': row[7],
+            'pnl': row[8],
+            'status': row[9]
+        }
+        trades.append(trade)
+    
+    conn.close()
+    return trades
+
+def get_all_stats():
+    """Récupère toutes les statistiques"""
+    conn = sqlite3.connect('trading.db')
+    cursor = conn.cursor()
+    
+    # Stats globales
+    cursor.execute('''
+        SELECT 
+            COUNT(*) as total_trades,
+            SUM(CASE WHEN pnl > 0 THEN 1 ELSE 0 END) as winning_trades,
+            SUM(CASE WHEN pnl < 0 THEN 1 ELSE 0 END) as losing_trades,
+            SUM(pnl) as total_pnl,
+            COUNT(CASE WHEN status = 'OPEN' THEN 1 END) as open_trades
+        FROM trades 
+        WHERE status = 'CLOSED'
+    ''')
+    
+    row = cursor.fetchone()
+    
+    # Trades ouverts
+    cursor.execute('SELECT COUNT(*) FROM trades WHERE status = "OPEN"')
+    open_trades = cursor.fetchone()[0]
+    
+    conn.close()
+    
+    if not row or row[0] == 0:
+        return {
+            'total_trades': 0,
+            'winning_trades': 0,
+            'losing_trades': 0,
+            'total_pnl': 0.0,
+            'win_rate': 0.0,
+            'open_trades': open_trades
+        }
+    
+    win_rate = (row[1] / row[0]) * 100 if row[0] > 0 else 0.0
+    
+    return {
+        'total_trades': row[0],
+        'winning_trades': row[1] or 0,
+        'losing_trades': row[2] or 0,
+        'total_pnl': row[3] or 0.0,
+        'win_rate': win_rate,
+        'open_trades': open_trades
+    }
+
+def get_pnl_chart_data():
+    """Récupère les données pour le graphique P&L"""
+    conn = sqlite3.connect('trading.db')
+    cursor = conn.cursor()
+    
+    cursor.execute('''
+        SELECT exit_timestamp, pnl 
+        FROM trades 
+        WHERE status = 'CLOSED' AND exit_timestamp IS NOT NULL
+        ORDER BY exit_timestamp ASC
+    ''')
+    
+    trades = cursor.fetchall()
+    conn.close()
+    
+    if not trades:
+        return []
+    
+    chart_data = []
+    cumulative_pnl = 0
+    
+    for timestamp, pnl in trades:
+        cumulative_pnl += pnl
+        # Formater la date pour l'affichage
+        try:
+            dt = datetime.fromisoformat(timestamp.replace('Z', '+00:00'))
+            time_label = dt.strftime('%H:%M')
+        except:
+            time_label = timestamp[:5]  # Fallback
+        
+        chart_data.append({
+            'time': time_label,
+            'pnl': cumulative_pnl
+        })
+    
+    return chart_data
 
 # Instance globale de l'application
 application = None
@@ -191,19 +294,6 @@ async def rapport_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     except Exception as e:
         logger.error(f"Erreur commande rapport: {e}")
         await update.message.reply_text("Erreur lors de la génération du rapport")
-# NOUVEAUX HANDLERS API
-async def api_stats_handler(request):
-    """API endpoint pour les statistiques"""
-    # ... (tout le code de cette fonction)
-
-async def api_trades_handler(request):
-    """API endpoint pour les trades récents"""
-    # ... (tout le code de cette fonction)
-
-async def api_chart_handler(request):
-    """API endpoint pour les données du graphique"""
-    # ... (tout le code de cette fonction)
-
 
 async def send_trade_alert(trade_data):
     """Envoie une alerte de trade"""
@@ -341,6 +431,35 @@ async def scheduler_daily_reports():
             logger.error(f"Erreur scheduler: {e}")
             await asyncio.sleep(60)
 
+# NOUVEAUX HANDLERS API
+async def api_stats_handler(request):
+    """API endpoint pour les statistiques"""
+    try:
+        stats = get_all_stats()
+        return web.json_response(stats)
+    except Exception as e:
+        logger.error(f"Erreur API stats: {e}")
+        return web.json_response({'error': str(e)}, status=500)
+
+async def api_trades_handler(request):
+    """API endpoint pour les trades récents"""
+    try:
+        limit = int(request.query.get('limit', 10))
+        trades = get_recent_trades(limit)
+        return web.json_response({'trades': trades})
+    except Exception as e:
+        logger.error(f"Erreur API trades: {e}")
+        return web.json_response({'error': str(e)}, status=500)
+
+async def api_chart_handler(request):
+    """API endpoint pour les données du graphique"""
+    try:
+        chart_data = get_pnl_chart_data()
+        return web.json_response({'chart_data': chart_data})
+    except Exception as e:
+        logger.error(f"Erreur API chart: {e}")
+        return web.json_response({'error': str(e)}, status=500)
+
 # Webhook pour TradingView
 async def webhook_handler(request):
     """Gestionnaire webhook TradingView"""
@@ -384,8 +503,6 @@ async def init_web_server():
     app.router.add_get('/api/stats', api_stats_handler)
     app.router.add_get('/api/trades', api_trades_handler)
     app.router.add_get('/api/chart', api_chart_handler)
-    
-    return app
     
     return app
 
@@ -466,4 +583,3 @@ Tapez /start pour les commandes
 
 if __name__ == '__main__':
     asyncio.run(main())
-
