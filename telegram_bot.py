@@ -1,15 +1,10 @@
 import asyncio
 import json
 import logging
-from datetime import datetime, timedelta, timezone
-from typing import Dict, List, Optional
+from datetime import datetime, timezone, timedelta
 import sqlite3
 import os
-from dataclasses import dataclass
-from decimal import Decimal
-import schedule
 import time
-import threading
 
 import aiohttp
 from aiohttp import web
@@ -17,12 +12,15 @@ import telegram
 from telegram.ext import Application, CommandHandler, ContextTypes
 from telegram import Update
 
-# Configuration
-TELEGRAM_BOT_TOKEN = os.getenv('TELEGRAM_BOT_TOKEN', '8427601866:AAF-D_BiODOunTel5Xs-WwxDn2V14XsxvQ0')
+# Configuration - VOS DONNÉES
+TELEGRAM_BOT_TOKEN = '8427601866:AAF-D_BiODOunTel5Xs-WwxDn2V14XsxvQ0'
 WEBHOOK_PORT = int(os.getenv('PORT', 8080))
-WEBHOOK_HOST = os.getenv('WEBHOOK_HOST', '0.0.0.0')
-ADMIN_CHAT_ID = os.getenv('ADMIN_CHAT_ID', '8147226685')  # Chat ID de l'admin
-PUBLIC_CHANNEL_ID = os.getenv('PUBLIC_CHANNEL_ID', '-1003034510195')  # ID du canal public
+WEBHOOK_HOST = '0.0.0.0'
+PUBLIC_CHANNEL_ID = '-1003034510195'
+ADMIN_CHAT_ID = '8147226685'
+
+# Timezone UTC+2
+TIMEZONE = timezone(timedelta(hours=2))
 
 # Configuration du logging
 logging.basicConfig(
@@ -31,458 +29,396 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-@dataclass
-class Trade:
-    id: str
-    symbol: str
-    side: str  # 'buy' or 'sell'
-    entry_price: float
-    quantity: float
-    timestamp: datetime
-    exit_price: Optional[float] = None
-    exit_timestamp: Optional[datetime] = None
-    pnl: Optional[float] = None
-    status: str = 'OPEN'  # OPEN, CLOSED, CANCELLED
+# Base de données simple
+def init_database():
+    conn = sqlite3.connect('trading.db')
+    cursor = conn.cursor()
+    
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS trades (
+            id TEXT PRIMARY KEY,
+            symbol TEXT NOT NULL,
+            side TEXT NOT NULL,
+            entry_price REAL NOT NULL,
+            quantity REAL NOT NULL,
+            timestamp TEXT NOT NULL,
+            exit_price REAL,
+            exit_timestamp TEXT,
+            pnl REAL,
+            status TEXT DEFAULT 'OPEN'
+        )
+    ''')
+    
+    conn.commit()
+    conn.close()
+    logger.info("Base de données initialisée")
 
-class TradingDatabase:
-    def __init__(self, db_path: str = 'trading.db'):
-        self.db_path = db_path
-        self.init_database()
+def add_trade(trade_id, symbol, side, price, quantity):
+    conn = sqlite3.connect('trading.db')
+    cursor = conn.cursor()
     
-    def init_database(self):
-        """Initialise la base de données SQLite"""
-        conn = sqlite3.connect(self.db_path)
-        cursor = conn.cursor()
-        
-        cursor.execute('''
-            CREATE TABLE IF NOT EXISTS trades (
-                id TEXT PRIMARY KEY,
-                symbol TEXT NOT NULL,
-                side TEXT NOT NULL,
-                entry_price REAL NOT NULL,
-                quantity REAL NOT NULL,
-                timestamp TEXT NOT NULL,
-                exit_price REAL,
-                exit_timestamp TEXT,
-                pnl REAL,
-                status TEXT DEFAULT 'OPEN'
-            )
-        ''')
-        
-        cursor.execute('''
-            CREATE TABLE IF NOT EXISTS daily_stats (
-                date TEXT PRIMARY KEY,
-                total_trades INTEGER,
-                winning_trades INTEGER,
-                losing_trades INTEGER,
-                total_pnl REAL,
-                win_rate REAL
-            )
-        ''')
-        
-        conn.commit()
-        conn.close()
+    timestamp = datetime.now(TIMEZONE).isoformat()
     
-    def add_trade(self, trade: Trade):
-        """Ajoute un nouveau trade"""
-        conn = sqlite3.connect(self.db_path)
-        cursor = conn.cursor()
-        
-        cursor.execute('''
-            INSERT OR REPLACE INTO trades 
-            (id, symbol, side, entry_price, quantity, timestamp, exit_price, exit_timestamp, pnl, status)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        ''', (
-            trade.id, trade.symbol, trade.side, trade.entry_price, trade.quantity,
-            trade.timestamp.isoformat(), 
-            trade.exit_price, 
-            trade.exit_timestamp.isoformat() if trade.exit_timestamp else None,
-            trade.pnl, trade.status
-        ))
-        
-        conn.commit()
-        conn.close()
+    cursor.execute('''
+        INSERT OR REPLACE INTO trades (id, symbol, side, entry_price, quantity, timestamp, status)
+        VALUES (?, ?, ?, ?, ?, ?, 'OPEN')
+    ''', (trade_id, symbol, side, price, quantity, timestamp))
     
-    def close_trade(self, trade_id: str, exit_price: float, exit_timestamp: datetime, pnl: float):
-        """Ferme un trade existant"""
-        conn = sqlite3.connect(self.db_path)
-        cursor = conn.cursor()
-        
-        cursor.execute('''
-            UPDATE trades 
-            SET exit_price = ?, exit_timestamp = ?, pnl = ?, status = 'CLOSED'
-            WHERE id = ?
-        ''', (exit_price, exit_timestamp.isoformat(), pnl, trade_id))
-        
-        conn.commit()
-        conn.close()
+    conn.commit()
+    conn.close()
+
+def close_trade(trade_id, exit_price, pnl):
+    conn = sqlite3.connect('trading.db')
+    cursor = conn.cursor()
     
-    def get_open_trades(self) -> List[Trade]:
-        """Récupère tous les trades ouverts"""
-        conn = sqlite3.connect(self.db_path)
-        cursor = conn.cursor()
-        
-        cursor.execute('SELECT * FROM trades WHERE status = "OPEN"')
-        rows = cursor.fetchall()
-        conn.close()
-        
-        trades = []
-        for row in rows:
-            trades.append(Trade(
-                id=row[0], symbol=row[1], side=row[2], entry_price=row[3],
-                quantity=row[4], timestamp=datetime.fromisoformat(row[5]),
-                exit_price=row[6], 
-                exit_timestamp=datetime.fromisoformat(row[7]) if row[7] else None,
-                pnl=row[8], status=row[9]
-            ))
-        
-        return trades
+    exit_timestamp = datetime.now(TIMEZONE).isoformat()
     
-    def get_daily_stats(self, date: datetime) -> Dict:
-        """Récupère les statistiques du jour"""
-        conn = sqlite3.connect(self.db_path)
-        cursor = conn.cursor()
-        
-        date_str = date.strftime('%Y-%m-%d')
-        
-        cursor.execute('''
-            SELECT 
-                COUNT(*) as total_trades,
-                SUM(CASE WHEN pnl > 0 THEN 1 ELSE 0 END) as winning_trades,
-                SUM(CASE WHEN pnl < 0 THEN 1 ELSE 0 END) as losing_trades,
-                SUM(pnl) as total_pnl,
-                AVG(CASE WHEN pnl > 0 THEN 1.0 ELSE 0.0 END) as win_rate
-            FROM trades 
-            WHERE DATE(exit_timestamp) = ? AND status = 'CLOSED'
-        ''', (date_str,))
-        
-        row = cursor.fetchone()
-        conn.close()
-        
-        if row[0] == 0:  # Aucun trade fermé aujourd'hui
-            return {
-                'date': date_str,
-                'total_trades': 0,
-                'winning_trades': 0,
-                'losing_trades': 0,
-                'total_pnl': 0.0,
-                'win_rate': 0.0
-            }
-        
+    cursor.execute('''
+        UPDATE trades 
+        SET exit_price = ?, exit_timestamp = ?, pnl = ?, status = 'CLOSED'
+        WHERE id = ?
+    ''', (exit_price, exit_timestamp, pnl, trade_id))
+    
+    conn.commit()
+    conn.close()
+
+def get_daily_stats(date):
+    conn = sqlite3.connect('trading.db')
+    cursor = conn.cursor()
+    
+    date_str = date.strftime('%Y-%m-%d')
+    
+    cursor.execute('''
+        SELECT 
+            COUNT(*) as total_trades,
+            SUM(CASE WHEN pnl > 0 THEN 1 ELSE 0 END) as winning_trades,
+            SUM(CASE WHEN pnl < 0 THEN 1 ELSE 0 END) as losing_trades,
+            SUM(pnl) as total_pnl,
+            COUNT(CASE WHEN status = 'OPEN' THEN 1 END) as open_trades
+        FROM trades 
+        WHERE DATE(exit_timestamp) = ? AND status = 'CLOSED'
+    ''', (date_str,))
+    
+    row = cursor.fetchone()
+    
+    # Trades ouverts
+    cursor.execute('SELECT COUNT(*) FROM trades WHERE status = "OPEN"')
+    open_trades = cursor.fetchone()[0]
+    
+    conn.close()
+    
+    if not row or row[0] == 0:
         return {
-            'date': date_str,
-            'total_trades': row[0] or 0,
-            'winning_trades': row[1] or 0,
-            'losing_trades': row[2] or 0,
-            'total_pnl': row[3] or 0.0,
-            'win_rate': (row[4] or 0.0) * 100
+            'total_trades': 0,
+            'winning_trades': 0,
+            'losing_trades': 0,
+            'total_pnl': 0.0,
+            'win_rate': 0.0,
+            'open_trades': open_trades
         }
+    
+    win_rate = (row[1] / row[0]) * 100 if row[0] > 0 else 0.0
+    
+    return {
+        'total_trades': row[0],
+        'winning_trades': row[1] or 0,
+        'losing_trades': row[2] or 0,
+        'total_pnl': row[3] or 0.0,
+        'win_rate': win_rate,
+        'open_trades': open_trades
+    }
 
-class TradingBot:
-    def __init__(self):
-        self.db = TradingDatabase()
-        self.application = None
-        
-    async def initialize(self):
-        """Initialise le bot Telegram"""
-        self.application = Application.builder().token(TELEGRAM_BOT_TOKEN).build()
-        
-        # Ajout des commandes
-        self.application.add_handler(CommandHandler("start", self.start_command))
-        self.application.add_handler(CommandHandler("stats", self.stats_command))
-        self.application.add_handler(CommandHandler("trades", self.trades_command))
-        self.application.add_handler(CommandHandler("pnl", self.pnl_command))
-        self.application.add_handler(CommandHandler("report", self.report_command))
-        
-        await self.application.initialize()
-        await self.application.start()
-        
-    async def start_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """Commande /start"""
-        welcome_message = """
-🚀 **Bot Trading BTC - Bienvenue !**
+# Instance globale de l'application
+application = None
 
-📊 **Commandes disponibles :**
+async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Commande /start"""
+    message = """
+🚀 Bot Trading BTC - Alertes Automatiques
+
+📊 Commandes disponibles :
+/start - Ce message
 /stats - Statistiques du jour
-/trades - Trades ouverts
-/pnl - P&L total
-/report - Rapport détaillé
+/rapport - Rapport détaillé
 
-📈 **Vous recevrez automatiquement :**
-• Alertes d'entrée en temps réel
-• Alertes de sortie avec P&L
-• Rapports quotidiens à 00:00 UTC
+📈 Fonctionnalités automatiques :
+• Alertes d'entrée/sortie en temps réel
+• Rapport quotidien à 22:00 UTC+2
 
-🎯 **Algo :** Quick Profits BTC 5M
-💰 **Risk par trade :** Configurable
-        """
-        await update.message.reply_text(welcome_message, parse_mode='Markdown')
-    
-    async def stats_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """Commande /stats - Statistiques du jour"""
-        today = datetime.now(timezone.utc)
-        stats = self.db.get_daily_stats(today)
+🎯 Algo : Quick Profits BTC 5M
+⚡ Status : Actif
+    """
+    await update.message.reply_text(message)
+
+async def stats_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Commande /stats"""
+    try:
+        today = datetime.now(TIMEZONE).date()
+        stats = get_daily_stats(today)
         
         message = f"""
-📊 **Statistiques du jour** ({stats['date']})
+📊 Statistiques du jour ({today.strftime('%d/%m/%Y')})
 
-🎯 **Trades :** {stats['total_trades']}
-✅ **Gagnants :** {stats['winning_trades']}
-❌ **Perdants :** {stats['losing_trades']}
-📈 **Win Rate :** {stats['win_rate']:.1f}%
-💰 **P&L Total :** {stats['total_pnl']:+.2f} USD
+🎯 Trades fermés : {stats['total_trades']}
+✅ Gagnants : {stats['winning_trades']}
+❌ Perdants : {stats['losing_trades']}
+📈 Win Rate : {stats['win_rate']:.1f}%
+💰 P&L : {stats['total_pnl']:+.2f} USD
+🔄 Trades ouverts : {stats['open_trades']}
         """
         
-        await update.message.reply_text(message, parse_mode='Markdown')
-    
-    async def trades_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """Commande /trades - Trades ouverts"""
-        open_trades = self.db.get_open_trades()
+        await update.message.reply_text(message)
+    except Exception as e:
+        logger.error(f"Erreur commande stats: {e}")
+        await update.message.reply_text("Erreur lors du calcul des statistiques")
+
+async def rapport_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Commande /rapport"""
+    try:
+        await send_daily_report(update.effective_chat.id)
+    except Exception as e:
+        logger.error(f"Erreur commande rapport: {e}")
+        await update.message.reply_text("Erreur lors de la génération du rapport")
+
+async def send_trade_alert(trade_data):
+    """Envoie une alerte de trade"""
+    try:
+        bot = telegram.Bot(token=TELEGRAM_BOT_TOKEN)
         
-        if not open_trades:
-            await update.message.reply_text("📊 Aucun trade ouvert actuellement")
-            return
-        
-        message = "📊 **Trades Ouverts :**\n\n"
-        for trade in open_trades:
-            duration = datetime.now(timezone.utc) - trade.timestamp
-            hours = duration.total_seconds() / 3600
+        if trade_data['action'] == 'entry':
+            # Nouvelle entrée
+            symbol = trade_data.get('symbol', 'BTCUSD')
+            side = trade_data.get('side', 'buy')
+            price = float(trade_data.get('price', 0))
+            quantity = float(trade_data.get('quantity', 0.05))
+            trade_id = trade_data.get('id', f"{symbol}_{int(time.time())}")
             
-            message += f"""
-🎯 **{trade.symbol}** - {trade.side.upper()}
-💰 Prix : {trade.entry_price:.2f}
-📊 Qty : {trade.quantity:.4f}
-⏱️ Durée : {hours:.1f}h
-📅 {trade.timestamp.strftime('%H:%M:%S')}
+            # Sauvegarder en base
+            add_trade(trade_id, symbol, side, price, quantity)
+            
+            # Message d'alerte
+            time_str = datetime.now(TIMEZONE).strftime('%H:%M:%S')
+            message = f"""
+🚀 NOUVELLE ENTRÉE
+
+🎯 {symbol} - {side.upper()}
+💰 Prix : {price:.2f} USD
+📊 Quantité : {quantity:.4f}
+⏰ Heure : {time_str} (UTC+2)
+
+🔥 Algo : Quick Profits BTC 5M
             """
-        
-        await update.message.reply_text(message, parse_mode='Markdown')
-    
-    async def pnl_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """Commande /pnl - P&L global"""
-        # Calculer P&L des 7 derniers jours
-        total_pnl = 0
-        for i in range(7):
-            date = datetime.now(timezone.utc) - timedelta(days=i)
-            stats = self.db.get_daily_stats(date)
-            total_pnl += stats['total_pnl']
-        
-        today_stats = self.db.get_daily_stats(datetime.now(timezone.utc))
-        
-        message = f"""
-💰 **P&L Summary**
-
-📈 **Aujourd'hui :** {today_stats['total_pnl']:+.2f} USD
-📊 **7 derniers jours :** {total_pnl:+.2f} USD
-
-🎯 **Trades aujourd'hui :** {today_stats['total_trades']}
-✅ **Win Rate :** {today_stats['win_rate']:.1f}%
-        """
-        
-        await update.message.reply_text(message, parse_mode='Markdown')
-    
-    async def report_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """Commande /report - Rapport détaillé"""
-        await self.send_daily_report(update.effective_chat.id)
-    
-    async def send_trade_alert(self, trade_data: Dict):
-        """Envoie une alerte de trade au canal public"""
-        try:
-            if trade_data['action'] == 'entry':
-                # Nouveau trade
-                trade = Trade(
-                    id=trade_data.get('id', f"{trade_data['symbol']}_{int(time.time())}"),
-                    symbol=trade_data['symbol'],
-                    side=trade_data['side'],
-                    entry_price=float(trade_data['price']),
-                    quantity=float(trade_data.get('quantity', 0.05)),
-                    timestamp=datetime.now(timezone.utc)
-                )
-                
-                self.db.add_trade(trade)
-                
-                message = f"""
-🚀 **NOUVELLE ENTRÉE**
-
-🎯 **{trade.symbol}** - {trade.side.upper()}
-💰 **Prix :** {trade.entry_price:.2f} USD
-📊 **Quantité :** {trade.quantity:.4f} BTC
-⏰ **Heure :** {trade.timestamp.strftime('%H:%M:%S UTC')}
-
-🔥 **Algorithme :** Quick Profits BTC 5M
-📈 **Signal :** POC Breakout + RSI Cross
-                """
-                
-            elif trade_data['action'] == 'exit':
-                # Fermeture de trade
-                trade_id = trade_data.get('id')
-                exit_price = float(trade_data['price'])
-                pnl = float(trade_data.get('pnl', 0))
-                
-                self.db.close_trade(trade_id, exit_price, datetime.now(timezone.utc), pnl)
-                
-                pnl_emoji = "💚" if pnl > 0 else "❤️"
-                pnl_text = "PROFIT" if pnl > 0 else "PERTE"
-                
-                message = f"""
-{pnl_emoji} **TRADE FERMÉ - {pnl_text}**
-
-🎯 **{trade_data['symbol']}**
-💰 **Prix de sortie :** {exit_price:.2f} USD
-📊 **P&L :** {pnl:+.2f} USD ({pnl/float(trade_data.get('entry_price', 1))*100:+.2f}%)
-⏰ **Heure :** {datetime.now(timezone.utc).strftime('%H:%M:%S UTC')}
-
-🎯 **Résultat :** {pnl_text}
-                """
             
-            # Envoyer au canal public
-            bot = telegram.Bot(token=TELEGRAM_BOT_TOKEN)
-            await bot.send_message(
-                chat_id=PUBLIC_CHANNEL_ID,
-                text=message,
-                parse_mode='Markdown'
-            )
+            await bot.send_message(chat_id=PUBLIC_CHANNEL_ID, text=message)
+            logger.info(f"Alerte entrée envoyée: {symbol} {side} {price}")
             
-            logger.info(f"Alerte envoyée: {trade_data['action']} pour {trade_data['symbol']}")
+        elif trade_data['action'] == 'exit':
+            # Fermeture de trade
+            symbol = trade_data.get('symbol', 'BTCUSD')
+            exit_price = float(trade_data.get('price', 0))
+            pnl = float(trade_data.get('pnl', 0))
+            trade_id = trade_data.get('id', '')
             
-        except Exception as e:
-            logger.error(f"Erreur lors de l'envoi d'alerte: {e}")
-    
-    async def send_daily_report(self, chat_id: str = None):
-        """Envoie le rapport quotidien"""
+            # Mettre à jour en base
+            if trade_id:
+                close_trade(trade_id, exit_price, pnl)
+            
+            # Message d'alerte
+            time_str = datetime.now(TIMEZONE).strftime('%H:%M:%S')
+            pnl_emoji = "💚" if pnl > 0 else "❤️"
+            pnl_text = "PROFIT" if pnl > 0 else "PERTE"
+            
+            message = f"""
+{pnl_emoji} TRADE FERMÉ - {pnl_text}
+
+🎯 {symbol}
+💰 Prix sortie : {exit_price:.2f} USD
+📊 P&L : {pnl:+.2f} USD
+⏰ Heure : {time_str} (UTC+2)
+            """
+            
+            await bot.send_message(chat_id=PUBLIC_CHANNEL_ID, text=message)
+            logger.info(f"Alerte sortie envoyée: {symbol} P&L={pnl}")
+            
+    except Exception as e:
+        logger.error(f"Erreur alerte trade: {e}")
+
+async def send_daily_report(chat_id=None):
+    """Envoie le rapport quotidien"""
+    try:
         chat_id = chat_id or PUBLIC_CHANNEL_ID
-        today = datetime.now(timezone.utc)
+        today = datetime.now(TIMEZONE).date()
         yesterday = today - timedelta(days=1)
         
-        today_stats = self.db.get_daily_stats(today)
-        yesterday_stats = self.db.get_daily_stats(yesterday)
+        # Stats d'aujourd'hui et hier
+        today_stats = get_daily_stats(today)
+        yesterday_stats = get_daily_stats(yesterday)
         
-        # Calcul des stats de la semaine
+        # Stats de la semaine
         weekly_pnl = 0
         weekly_trades = 0
         for i in range(7):
             date = today - timedelta(days=i)
-            stats = self.db.get_daily_stats(date)
+            stats = get_daily_stats(date)
             weekly_pnl += stats['total_pnl']
             weekly_trades += stats['total_trades']
         
+        # Génération du rapport
         report = f"""
-📊 **RAPPORT QUOTIDIEN** - {today.strftime('%d/%m/%Y')}
+📊 RAPPORT QUOTIDIEN - {today.strftime('%d/%m/%Y')}
 
-🎯 **AUJOURD'HUI**
-• Trades: {today_stats['total_trades']}
-• Win Rate: {today_stats['win_rate']:.1f}%
-• P&L: {today_stats['total_pnl']:+.2f} USD
+🎯 AUJOURD'HUI
+• Trades fermés : {today_stats['total_trades']}
+• Win Rate : {today_stats['win_rate']:.1f}%
+• P&L : {today_stats['total_pnl']:+.2f} USD
+• Trades ouverts : {today_stats['open_trades']}
 
-📈 **HIER**
-• P&L: {yesterday_stats['total_pnl']:+.2f} USD
-• Trades: {yesterday_stats['total_trades']}
+📈 HIER
+• P&L : {yesterday_stats['total_pnl']:+.2f} USD
+• Trades : {yesterday_stats['total_trades']}
 
-📊 **7 DERNIERS JOURS**
-• P&L Total: {weekly_pnl:+.2f} USD
-• Trades Total: {weekly_trades}
-• P&L Moyen/jour: {weekly_pnl/7:+.2f} USD
+📊 7 DERNIERS JOURS
+• P&L Total : {weekly_pnl:+.2f} USD
+• Trades Total : {weekly_trades}
+• P&L Moyen/jour : {weekly_pnl/7:+.2f} USD
 
-🚀 **ALGORITHME:** Quick Profits BTC 5M
-⚡ **STATUS:** Actif 24/7
-🎯 **RISK:** 5% par trade
+🚀 ALGORITHME : Quick Profits BTC 5M
+⚡ STATUS : Actif 24/7
+🎯 RISK : 5% par trade
 
 ---
-💡 **Prochaines Sessions:**
-🏮 Asie: 20:00-08:00 UTC
-🇪🇺 Europe: 08:00-16:00 UTC  
-🇺🇸 USA: 14:00-22:00 UTC
+Prochain rapport : Demain 22:00 UTC+2
         """
         
+        bot = telegram.Bot(token=TELEGRAM_BOT_TOKEN)
+        await bot.send_message(chat_id=chat_id, text=report)
+        logger.info("Rapport quotidien envoyé")
+        
+    except Exception as e:
+        logger.error(f"Erreur rapport quotidien: {e}")
+
+async def scheduler_daily_reports():
+    """Scheduler pour les rapports quotidiens à 22:00 UTC+2"""
+    while True:
         try:
-            bot = telegram.Bot(token=TELEGRAM_BOT_TOKEN)
-            await bot.send_message(
-                chat_id=chat_id,
-                text=report,
-                parse_mode='Markdown'
-            )
-            logger.info("Rapport quotidien envoyé")
+            now = datetime.now(TIMEZONE)
+            
+            # Vérifier si c'est 22:00
+            if now.hour == 22 and now.minute == 0:
+                await send_daily_report()
+                # Attendre 61 secondes pour éviter les doublons
+                await asyncio.sleep(61)
+            else:
+                # Vérifier chaque minute
+                await asyncio.sleep(60)
+                
         except Exception as e:
-            logger.error(f"Erreur lors de l'envoi du rapport: {e}")
+            logger.error(f"Erreur scheduler: {e}")
+            await asyncio.sleep(60)
 
-# Instance globale du bot
-trading_bot = TradingBot()
-
+# Webhook pour TradingView
 async def webhook_handler(request):
-    """Gestionnaire des webhooks de TradingView"""
+    """Gestionnaire webhook TradingView"""
     try:
         data = await request.json()
-        logger.info(f"Webhook reçu: {data}")
+        logger.info(f"Webhook TradingView reçu: {data}")
         
-        # Traitement des données du webhook
+        # Vérifier que c'est un signal valide
         if 'action' in data and 'symbol' in data:
-            await trading_bot.send_trade_alert(data)
+            await send_trade_alert(data)
         
         return web.json_response({'status': 'success'})
-    
+        
     except Exception as e:
         logger.error(f"Erreur webhook: {e}")
         return web.json_response({'error': str(e)}, status=400)
 
-def schedule_daily_reports():
-    """Programme les rapports quotidiens"""
-    schedule.every().day.at("00:00").do(
-        lambda: asyncio.create_task(trading_bot.send_daily_report())
-    )
-    
-    while True:
-        schedule.run_pending()
-        time.sleep(60)  # Vérifier chaque minute
-
 async def init_web_server():
-    """Initialise le serveur web pour les webhooks"""
+    """Initialise le serveur web"""
     app = web.Application()
     app.router.add_post('/webhook', webhook_handler)
-    app.router.add_get('/health', lambda r: web.json_response({'status': 'ok'}))
+    app.router.add_get('/health', lambda r: web.json_response({
+        'status': 'ok',
+        'time': datetime.now(TIMEZONE).isoformat(),
+        'version': 'simple_bot_v1.0'
+    }))
     
     return app
 
 async def main():
     """Fonction principale"""
-    logger.info("Démarrage du bot trading...")
+    global application
     
-    # Initialisation du bot Telegram
-    await trading_bot.initialize()
-    logger.info("Bot Telegram initialisé")
+    logger.info("Démarrage du bot trading simple...")
     
-    # Démarrage du serveur web pour webhooks
-    app = await init_web_server()
-    runner = web.AppRunner(app)
-    await runner.setup()
-    site = web.TCPSite(runner, WEBHOOK_HOST, WEBHOOK_PORT)
-    await site.start()
-    logger.info(f"Serveur webhook démarré sur {WEBHOOK_HOST}:{WEBHOOK_PORT}")
-    
-    # Démarrage du scheduler pour rapports quotidiens en thread séparé
-    scheduler_thread = threading.Thread(target=schedule_daily_reports, daemon=True)
-    scheduler_thread.start()
-    logger.info("Scheduler de rapports démarré")
-    
-    # Message de démarrage
     try:
+        # 1. Initialisation base de données
+        init_database()
+        
+        # 2. Initialisation bot Telegram
+        application = Application.builder().token(TELEGRAM_BOT_TOKEN).build()
+        
+        # Ajout des commandes
+        application.add_handler(CommandHandler("start", start_command))
+        application.add_handler(CommandHandler("stats", stats_command))
+        application.add_handler(CommandHandler("rapport", rapport_command))
+        
+        await application.initialize()
+        await application.start()
+        
+        # 3. Démarrage serveur webhook
+        app = await init_web_server()
+        runner = web.AppRunner(app)
+        await runner.setup()
+        site = web.TCPSite(runner, WEBHOOK_HOST, WEBHOOK_PORT)
+        await site.start()
+        
+        logger.info(f"Serveur webhook démarré sur {WEBHOOK_HOST}:{WEBHOOK_PORT}")
+        
+        # 4. Démarrage polling Telegram
+        await application.updater.start_polling(
+            drop_pending_updates=True,
+            poll_interval=2.0
+        )
+        logger.info("Polling Telegram démarré")
+        
+        # 5. Démarrage scheduler rapports quotidiens
+        asyncio.create_task(scheduler_daily_reports())
+        logger.info("Scheduler rapports quotidiens démarré (22:00 UTC+2)")
+        
+        # 6. Message de démarrage
         bot = telegram.Bot(token=TELEGRAM_BOT_TOKEN)
         await bot.send_message(
             chat_id=PUBLIC_CHANNEL_ID,
-            text="🚀 **BOT TRADING DÉMARRÉ**\n\n📊 Surveillance des signaux activée\n⚡ Prêt à recevoir les alertes !",
-            parse_mode='Markdown'
+            text=f"""
+🚀 BOT TRADING REDÉMARRÉ
+
+📊 Surveillance active
+⚡ Alertes opérationnelles  
+📋 Rapport quotidien à 22:00 UTC+2
+
+Tapez /start pour les commandes
+            """
         )
-    except Exception as e:
-        logger.error(f"Impossible d'envoyer le message de démarrage: {e}")
-    
-    # Maintenir le bot en vie
-    try:
+        logger.info("Message de démarrage envoyé")
+        
+        # 7. Boucle principale
+        logger.info("Bot entièrement opérationnel")
         while True:
-            await asyncio.sleep(1)
-    except KeyboardInterrupt:
-        logger.info("Arrêt du bot...")
+            await asyncio.sleep(60)
+            
+    except Exception as e:
+        logger.error(f"Erreur fatale: {e}")
+        raise
+        
     finally:
-        await trading_bot.application.stop()
-        await trading_bot.application.shutdown()
+        if application:
+            try:
+                await application.updater.stop()
+                await application.stop()
+                await application.shutdown()
+            except:
+                pass
 
 if __name__ == '__main__':
     asyncio.run(main())
