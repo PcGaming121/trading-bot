@@ -128,9 +128,8 @@ def get_daily_stats(date):
         'open_trades': open_trades
     }
 
-# NOUVELLES FONCTIONS POUR L'API (ajoutées après get_daily_stats)
 def get_recent_trades(limit=10):
-    """Récupère les trades récents pour l'API"""
+    """Récupère les trades récents"""
     conn = sqlite3.connect('trading.db')
     cursor = conn.cursor()
     
@@ -162,7 +161,7 @@ def get_recent_trades(limit=10):
     return trades
 
 def get_all_stats():
-    """Récupère toutes les statistiques pour l'API"""
+    """Récupère toutes les statistiques"""
     conn = sqlite3.connect('trading.db')
     cursor = conn.cursor()
     
@@ -172,7 +171,8 @@ def get_all_stats():
             COUNT(*) as total_trades,
             SUM(CASE WHEN pnl > 0 THEN 1 ELSE 0 END) as winning_trades,
             SUM(CASE WHEN pnl < 0 THEN 1 ELSE 0 END) as losing_trades,
-            SUM(pnl) as total_pnl
+            SUM(pnl) as total_pnl,
+            COUNT(CASE WHEN status = 'OPEN' THEN 1 END) as open_trades
         FROM trades 
         WHERE status = 'CLOSED'
     ''')
@@ -431,12 +431,13 @@ async def scheduler_daily_reports():
             logger.error(f"Erreur scheduler: {e}")
             await asyncio.sleep(60)
 
-# NOUVEAUX HANDLERS API (ajoutés après scheduler_daily_reports)
+# NOUVEAUX HANDLERS API - avec gestion CORS intégrée
 async def api_stats_handler(request):
     """API endpoint pour les statistiques"""
     try:
-        response = web.json_response(get_all_stats())
-        # Ajouter CORS seulement pour cette route
+        stats = get_all_stats()
+        response = web.json_response(stats)
+        # CORS uniquement pour les API endpoints
         response.headers['Access-Control-Allow-Origin'] = '*'
         return response
     except Exception as e:
@@ -449,7 +450,7 @@ async def api_trades_handler(request):
         limit = int(request.query.get('limit', 10))
         trades = get_recent_trades(limit)
         response = web.json_response({'trades': trades})
-        # Ajouter CORS seulement pour cette route
+        # CORS uniquement pour les API endpoints
         response.headers['Access-Control-Allow-Origin'] = '*'
         return response
     except Exception as e:
@@ -461,14 +462,14 @@ async def api_chart_handler(request):
     try:
         chart_data = get_pnl_chart_data()
         response = web.json_response({'chart_data': chart_data})
-        # Ajouter CORS seulement pour cette route
+        # CORS uniquement pour les API endpoints
         response.headers['Access-Control-Allow-Origin'] = '*'
         return response
     except Exception as e:
         logger.error(f"Erreur API chart: {e}")
         return web.json_response({'error': str(e)}, status=500)
 
-# Webhook pour TradingView
+# Webhook pour TradingView - INCHANGÉ
 async def webhook_handler(request):
     """Gestionnaire webhook TradingView"""
     try:
@@ -486,7 +487,7 @@ async def webhook_handler(request):
         return web.json_response({'error': str(e)}, status=400)
 
 async def init_web_server():
-    """Initialise le serveur web - VERSION SÉCURISÉE"""
+    """Initialise le serveur web"""
     app = web.Application()
     
     # Routes existantes - INCHANGÉES
@@ -497,7 +498,7 @@ async def init_web_server():
         'version': 'simple_bot_v1.0'
     }))
     
-    # NOUVELLES ROUTES API - ajoutées sans middleware global
+    # NOUVELLES ROUTES API - avec CORS intégré directement
     app.router.add_get('/api/stats', api_stats_handler)
     app.router.add_get('/api/trades', api_trades_handler)
     app.router.add_get('/api/chart', api_chart_handler)
