@@ -22,7 +22,7 @@ TELEGRAM_BOT_TOKEN = '8412949168:AAGk_F8gQcECVWKK1_ARGhbHpVx_e3GS-5o'
 WEBHOOK_PORT = int(os.getenv('PORT', 8080))
 WEBHOOK_HOST = '0.0.0.0'
 ADMIN_CHAT_ID = '8147226685'
-PUBLIC_CHANNEL_ID = '-4950276288'
+PUBLIC_CHANNEL_ID = '-1003034510195'
 
 # Configuration du logging
 logging.basicConfig(
@@ -803,3 +803,4 @@ async def main():
 
 if __name__ == '__main__':
     asyncio.run(main())
+
