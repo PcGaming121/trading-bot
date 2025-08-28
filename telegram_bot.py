@@ -128,8 +128,9 @@ def get_daily_stats(date):
         'open_trades': open_trades
     }
 
+# NOUVELLES FONCTIONS POUR L'API (ajoutées après get_daily_stats)
 def get_recent_trades(limit=10):
-    """Récupère les trades récents"""
+    """Récupère les trades récents pour l'API"""
     conn = sqlite3.connect('trading.db')
     cursor = conn.cursor()
     
@@ -161,7 +162,7 @@ def get_recent_trades(limit=10):
     return trades
 
 def get_all_stats():
-    """Récupère toutes les statistiques"""
+    """Récupère toutes les statistiques pour l'API"""
     conn = sqlite3.connect('trading.db')
     cursor = conn.cursor()
     
@@ -171,8 +172,7 @@ def get_all_stats():
             COUNT(*) as total_trades,
             SUM(CASE WHEN pnl > 0 THEN 1 ELSE 0 END) as winning_trades,
             SUM(CASE WHEN pnl < 0 THEN 1 ELSE 0 END) as losing_trades,
-            SUM(pnl) as total_pnl,
-            COUNT(CASE WHEN status = 'OPEN' THEN 1 END) as open_trades
+            SUM(pnl) as total_pnl
         FROM trades 
         WHERE status = 'CLOSED'
     ''')
@@ -431,12 +431,14 @@ async def scheduler_daily_reports():
             logger.error(f"Erreur scheduler: {e}")
             await asyncio.sleep(60)
 
-# NOUVEAUX HANDLERS API
+# NOUVEAUX HANDLERS API (ajoutés après scheduler_daily_reports)
 async def api_stats_handler(request):
     """API endpoint pour les statistiques"""
     try:
-        stats = get_all_stats()
-        return web.json_response(stats)
+        response = web.json_response(get_all_stats())
+        # Ajouter CORS seulement pour cette route
+        response.headers['Access-Control-Allow-Origin'] = '*'
+        return response
     except Exception as e:
         logger.error(f"Erreur API stats: {e}")
         return web.json_response({'error': str(e)}, status=500)
@@ -446,7 +448,10 @@ async def api_trades_handler(request):
     try:
         limit = int(request.query.get('limit', 10))
         trades = get_recent_trades(limit)
-        return web.json_response({'trades': trades})
+        response = web.json_response({'trades': trades})
+        # Ajouter CORS seulement pour cette route
+        response.headers['Access-Control-Allow-Origin'] = '*'
+        return response
     except Exception as e:
         logger.error(f"Erreur API trades: {e}")
         return web.json_response({'error': str(e)}, status=500)
@@ -455,7 +460,10 @@ async def api_chart_handler(request):
     """API endpoint pour les données du graphique"""
     try:
         chart_data = get_pnl_chart_data()
-        return web.json_response({'chart_data': chart_data})
+        response = web.json_response({'chart_data': chart_data})
+        # Ajouter CORS seulement pour cette route
+        response.headers['Access-Control-Allow-Origin'] = '*'
+        return response
     except Exception as e:
         logger.error(f"Erreur API chart: {e}")
         return web.json_response({'error': str(e)}, status=500)
@@ -478,20 +486,10 @@ async def webhook_handler(request):
         return web.json_response({'error': str(e)}, status=400)
 
 async def init_web_server():
-    """Initialise le serveur web"""
+    """Initialise le serveur web - VERSION SÉCURISÉE"""
     app = web.Application()
     
-    # CORS pour permettre l'accès depuis le dashboard
-    async def cors_handler(request, handler):
-        response = await handler(request)
-        response.headers['Access-Control-Allow-Origin'] = '*'
-        response.headers['Access-Control-Allow-Methods'] = 'GET, POST, OPTIONS'
-        response.headers['Access-Control-Allow-Headers'] = 'Content-Type'
-        return response
-    
-    app.middlewares.append(cors_handler)
-    
-    # Routes existantes
+    # Routes existantes - INCHANGÉES
     app.router.add_post('/webhook', webhook_handler)
     app.router.add_get('/health', lambda r: web.json_response({
         'status': 'ok',
@@ -499,7 +497,7 @@ async def init_web_server():
         'version': 'simple_bot_v1.0'
     }))
     
-    # NOUVELLES ROUTES API
+    # NOUVELLES ROUTES API - ajoutées sans middleware global
     app.router.add_get('/api/stats', api_stats_handler)
     app.router.add_get('/api/trades', api_trades_handler)
     app.router.add_get('/api/chart', api_chart_handler)
