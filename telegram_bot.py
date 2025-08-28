@@ -87,6 +87,18 @@ def get_daily_stats(date):
     cursor = conn.cursor()
     
     date_str = date.strftime('%Y-%m-%d')
+
+    def get_recent_trades(limit=10):
+    """Récupère les trades récents"""
+    # ... (tout le code de cette fonction)
+
+def get_all_stats():
+    """Récupère toutes les statistiques"""
+    # ... (tout le code de cette fonction)
+
+def get_pnl_chart_data():
+    """Récupère les données pour le graphique P&L"""
+    # ... (tout le code de cette fonction)
     
     cursor.execute('''
         SELECT 
@@ -179,6 +191,19 @@ async def rapport_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     except Exception as e:
         logger.error(f"Erreur commande rapport: {e}")
         await update.message.reply_text("Erreur lors de la génération du rapport")
+# NOUVEAUX HANDLERS API
+async def api_stats_handler(request):
+    """API endpoint pour les statistiques"""
+    # ... (tout le code de cette fonction)
+
+async def api_trades_handler(request):
+    """API endpoint pour les trades récents"""
+    # ... (tout le code de cette fonction)
+
+async def api_chart_handler(request):
+    """API endpoint pour les données du graphique"""
+    # ... (tout le code de cette fonction)
+
 
 async def send_trade_alert(trade_data):
     """Envoie une alerte de trade"""
@@ -336,12 +361,31 @@ async def webhook_handler(request):
 async def init_web_server():
     """Initialise le serveur web"""
     app = web.Application()
+    
+    # CORS pour permettre l'accès depuis le dashboard
+    async def cors_handler(request, handler):
+        response = await handler(request)
+        response.headers['Access-Control-Allow-Origin'] = '*'
+        response.headers['Access-Control-Allow-Methods'] = 'GET, POST, OPTIONS'
+        response.headers['Access-Control-Allow-Headers'] = 'Content-Type'
+        return response
+    
+    app.middlewares.append(cors_handler)
+    
+    # Routes existantes
     app.router.add_post('/webhook', webhook_handler)
     app.router.add_get('/health', lambda r: web.json_response({
         'status': 'ok',
         'time': datetime.now(TIMEZONE).isoformat(),
         'version': 'simple_bot_v1.0'
     }))
+    
+    # NOUVELLES ROUTES API
+    app.router.add_get('/api/stats', api_stats_handler)
+    app.router.add_get('/api/trades', api_trades_handler)
+    app.router.add_get('/api/chart', api_chart_handler)
+    
+    return app
     
     return app
 
@@ -422,3 +466,4 @@ Tapez /start pour les commandes
 
 if __name__ == '__main__':
     asyncio.run(main())
+
